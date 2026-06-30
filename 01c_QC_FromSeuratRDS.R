@@ -29,7 +29,7 @@
 ## 來源 RDS (已整合的大物件)。若該物件已經在環境中 (變數名 SeuratObject),
 ## 本腳本不會重複讀取,直接用既有的,省下再讀 13GB 的時間。
 RDS_PATH   <- "X:/Dataset_Online/##_Keloid/scRNA-seq/rds/GSE307504/Integration_0427_seurat_annotated.rds"
-OUT_ROOT   <- "Z:/Dataset_Online/scRNA-seq/#Keloid_QC"   # 與 01 共用輸出
+OUT_ROOT   <- "X:/Dataset_Online/##_Keloid/scRNA-seq/rds_QC"   # 與 01 共用輸出
 GSE_LABEL  <- "GSE307504"        # 輸出資料夾用的 GSE 名 (會去掉開頭非英數字元)
 SAMPLE_COL <- "sample"           # 用哪個 meta.data 欄位區分樣本
 RNA_ASSAY  <- "RNA"              # QC 要用的 assay (原始 counts 所在)
