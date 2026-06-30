@@ -29,7 +29,7 @@
 
 ## ----------------------------- 0. 路徑設定 -------------------------------- ##
 SRC_ROOT <- "Z:/Dataset_Online/scRNA-seq/h5"            # 放 .h5 的來源根目錄
-OUT_ROOT <- "Z:/Dataset_Online/scRNA-seq/#Keloid_QC"    # 與 01 共用輸出
+OUT_ROOT <- "Z:/Dataset_Online/scRNA-seq/h5_QC"    # 與 01 共用輸出
 
 ## ------ 過濾門檻 (與 01 完全相同) ------ ##
 MIN_FEATURE <- 200
