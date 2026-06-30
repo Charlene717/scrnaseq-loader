@@ -31,8 +31,8 @@
 ###############################################################################
 
 ## ----------------------------- 0. 路徑設定 -------------------------------- ##
-SRC_ROOT <- "Z:/Dataset_Online/scRNA-seq/##_Keloid"        # dense matrix 來源根目錄
-OUT_ROOT <- "Z:/Dataset_Online/scRNA-seq/#Keloid_QC"       # QC 輸出(與 01 共用)
+SRC_ROOT <- "X:/Dataset_Online/##_Keloid/scRNA-seq/matrix"      # dense matrix 來源根目錄
+OUT_ROOT <- "X:/Dataset_Online/##_Keloid/scRNA-seq/matrix_QC"   # QC 輸出根目錄
 
 ## ------ 過濾門檻(與 01 完全相同) ------ ##
 MIN_FEATURE <- 200
