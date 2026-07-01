@@ -30,8 +30,8 @@
 ###############################################################################
 
 ## ----------------------------- 0. 路徑設定 -------------------------------- ##
-SRC_ROOT <- "Z:/Dataset_Online/scRNA-seq/loom"          # 放 .loom 的來源根目錄
-OUT_ROOT <- "Z:/Dataset_Online/scRNA-seq/#Keloid_QC"    # 與 01 共用輸出
+SRC_ROOT <- "X:/Dataset_Online/##_Keloid/scRNA-seq/loom"          # 放 .loom 的來源根目錄
+OUT_ROOT <- "X:/Dataset_Online/##_Keloid/scRNA-seq/loom_QC"    # QC 輸出根目錄
 
 ## ------ 過濾門檻 (與 01 完全相同) ------ ##
 MIN_FEATURE <- 200
