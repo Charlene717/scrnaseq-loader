@@ -11,7 +11,7 @@
 ###############################################################################
 
 ## >>>>>>>>>> 改這裡:指向一個 .loom.gz <<<<<<<<<<
-LOOM_GZ <- "Z:/Dataset_Online/scRNA-seq/loom/#GSE153596/GSM4647789_P21_2.loom.gz"
+LOOM_GZ <- "X:/Dataset_Online/##_Keloid/scRNA-seq/loom/#GSE153596/GSM4647789_P21_2.loom.gz"
 ## >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
 if (!requireNamespace("hdf5r", quietly = TRUE)) stop("需要 hdf5r")
