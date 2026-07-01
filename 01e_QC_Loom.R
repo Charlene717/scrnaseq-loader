@@ -86,7 +86,7 @@ log_line <- function(msg) {
 PERSAMPLE_DIR <- file.path(LOG_DIR, "per_sample"); ensure_dir(PERSAMPLE_DIR)
 write_metrics_row <- function(row) {
   fn <- file.path(PERSAMPLE_DIR, sprintf("%s__%s.csv", row$GSE,
-                  gsub("[^A-Za-z0-9_.-]", "_", as.character(row$GSM))))
+                                         gsub("[^A-Za-z0-9_.-]", "_", as.character(row$GSM))))
   write_csv_utf8(row, fn)
 }
 get_counts_obj <- function(obj, assay=NULL) {
@@ -106,12 +106,12 @@ summarise_obj <- function(obj, label) {
   sm <- function(x) if (length(x)) mean(x, na.rm=TRUE) else NA_real_
   md_ <- function(x) if (length(x)) median(x, na.rm=TRUE) else NA_real_
   data.frame(state=label, n_cells=ncol(obj),
-    n_genes_detected=sum(Matrix::rowSums(get_counts_obj(obj) > 0) > 0),
-    mean_nCount=sm(md$nCount_RNA), median_nCount=md_(md$nCount_RNA),
-    mean_nFeature=sm(md$nFeature_RNA), median_nFeature=md_(md$nFeature_RNA),
-    mean_percent_mt=sm(md$percent.mt), median_percent_mt=md_(md$percent.mt),
-    mean_percent_ribo=if(!is.null(md$percent.ribo)) sm(md$percent.ribo) else NA_real_,
-    stringsAsFactors=FALSE)
+             n_genes_detected=sum(Matrix::rowSums(get_counts_obj(obj) > 0) > 0),
+             mean_nCount=sm(md$nCount_RNA), median_nCount=md_(md$nCount_RNA),
+             mean_nFeature=sm(md$nFeature_RNA), median_nFeature=md_(md$nFeature_RNA),
+             mean_percent_mt=sm(md$percent.mt), median_percent_mt=md_(md$percent.mt),
+             mean_percent_ribo=if(!is.null(md$percent.ribo)) sm(md$percent.ribo) else NA_real_,
+             stringsAsFactors=FALSE)
 }
 mad_bounds <- function(x, nmads=3, log=FALSE) {
   v <- if (log) log1p(x) else x
@@ -125,12 +125,21 @@ frac_barcode <- function(v) {
   if (length(v) == 0) return(0)
   mean(grepl("^[ACGTacgt]{6,}([.:_-]?\\w+)?$", v))
 }
-frac_gene <- function(v) {
+## 像「gene 相關」(含 Ensembl ID 或 symbol,用來定位 gene 是哪一維)
+frac_gene_any <- function(v) {
+  if (length(v) == 0) return(0)
+  mean(grepl("^(ENS[A-Z]*G[0-9]+|MT-|mt-|[A-Za-z][A-Za-z0-9]*(-[A-Za-z0-9]+)?)$", v))
+}
+## 像「gene SYMBOL」(Ensembl ID 不算;用來在多個 gene 欄中優先挑 symbol,
+## 確保 rownames 帶 MT-/mt- 前綴,物種偵測才抓得到)
+frac_gene_symbol <- function(v) {
   if (length(v) == 0) return(0)
   common <- c("ACTB","GAPDH","MALAT1","MT-CO1","MT-ND1","SAMD11","NOC2L","COL1A1",
-              "COL1A2","COL3A1","PIEZO2","RPL13","B2M","TMSB4X")
-  mean(toupper(v) %in% common |
-       grepl("^(ENSG[0-9]+|ENSMUSG[0-9]+|[A-Z][A-Z0-9]{1,}(-[A-Z0-9]+)?)$", toupper(v)))
+              "COL1A2","COL3A1","PIEZO2","RPL13","B2M","TMSB4X","XKR4","SOX17")
+  is_ensembl <- grepl("^ENS[A-Z]*G[0-9]+$", toupper(v))
+  is_symbol  <- (toupper(v) %in% common) |
+    grepl("^(MT-|mt-|[A-Za-z][A-Za-z0-9]*(-[A-Za-z0-9]+)?)$", v)
+  mean(is_symbol & !is_ensembl)
 }
 
 ## ---- 核心:讀一個 .loom -> gene×cell sparse matrix ----
@@ -138,13 +147,13 @@ frac_gene <- function(v) {
 read_loom_matrix <- function(path) {
   h <- hdf5r::H5File$new(path, mode = "r")
   on.exit(h$close_all(), add = TRUE)
-
+  
   ## 主矩陣 (loom: /matrix 或 /layers/<layer>)
   mat_path <- if (LOOM_MATRIX_LAYER == "matrix" || is.null(LOOM_MATRIX_LAYER)) "matrix"
-              else file.path("layers", LOOM_MATRIX_LAYER)
+  else file.path("layers", LOOM_MATRIX_LAYER)
   if (!h$exists(mat_path)) mat_path <- "matrix"   # 後備
   mat <- h[[mat_path]]$read()                     # 讀成一般 matrix (row x col)
-
+  
   ## 讀 row_attrs / col_attrs 的所有欄位值
   read_attrs <- function(grp) {
     if (!h$exists(grp)) return(list())
@@ -161,46 +170,70 @@ read_loom_matrix <- function(path) {
   }
   row_attrs <- read_attrs("row_attrs")
   col_attrs <- read_attrs("col_attrs")
-
+  
   nrow_m <- nrow(mat); ncol_m <- ncol(mat)
-
-  ## 只挑「長度符合矩陣維度」的 attribute 當候選
-  row_cands <- row_attrs[vapply(row_attrs, function(v) length(v) == nrow_m, logical(1))]
-  col_cands <- col_attrs[vapply(col_attrs, function(v) length(v) == ncol_m, logical(1))]
-
-  best_by <- function(cands, scorer) {
-    if (length(cands) == 0) return(list(key=NULL, score=-1))
-    scores <- vapply(cands, scorer, numeric(1))
-    list(key = names(cands)[which.max(scores)], score = max(scores))
-  }
-  rg <- best_by(row_cands, frac_gene);     rb <- best_by(row_cands, frac_barcode)
-  cg <- best_by(col_cands, frac_gene);     cb <- best_by(col_cands, frac_barcode)
-
-  ## 方向:比較 (row像gene + col像bc) vs (row像bc + col像gene)
-  score_normal     <- max(rg$score,0) + max(cb$score,0)
-  score_transposed <- max(rb$score,0) + max(cg$score,0)
-
-  if (score_transposed > score_normal && score_transposed > 0) {
-    ## cell x gene -> 轉置成 gene x cell
-    genes <- if (!is.null(cg$key)) col_cands[[cg$key]] else paste0("Gene", seq_len(ncol_m))
-    cells <- if (!is.null(rb$key)) row_cands[[rb$key]] else paste0("Cell", seq_len(nrow_m))
-    mat <- t(mat)
-    note <- sprintf("cell_x_gene(已轉置); gene=%s cell=%s", cg$key, rb$key)
+  
+  ## ============================================================= ##
+  ## 修正版偵測 (經真實 loom 驗證):
+  ##   關鍵教訓 — 不能假設 row_attrs 一定對應 matrix 的 row!
+  ##   有些 loom (如 velocyto 輸出) 的 row_attrs 長度 = matrix 的「另一維」。
+  ##   正確做法:
+  ##     1. 蒐集 row_attrs + col_attrs 全部欄位,各自記錄「值」與「長度」。
+  ##     2. 用 frac_gene_any 找出「哪組 attribute 是 gene 相關」-> 其長度定位 gene 維。
+  ##     3. gene 維 = matrix 中長度 == 該 attr 長度 的那一維;據此決定是否轉置。
+  ##     4. 在 gene 維長度相同的欄位中,「symbol 優先於 Ensembl ID」挑 gene 名,
+  ##        以確保 rownames 是 MT-/mt- 開頭的 symbol,物種偵測才抓得到。
+  ##     5. cell 名 = 另一維長度的欄位 (優先名字含 cell/id/barcode)。
+  ## ============================================================= ##
+  
+  ## 合併所有 attribute,標記來源與長度
+  all_attrs <- c(
+    setNames(row_attrs, paste0("row/", names(row_attrs))),
+    setNames(col_attrs, paste0("col/", names(col_attrs)))
+  )
+  all_attrs <- all_attrs[vapply(all_attrs, function(v) length(v) > 0, logical(1))]
+  if (length(all_attrs) == 0) stop("loom 沒有可用的 row_attrs/col_attrs")
+  
+  ## (1) 定位 gene 維:哪個 attribute 最像 gene (含 Ensembl 或 symbol 皆可)
+  any_scores <- vapply(all_attrs, frac_gene_any, numeric(1))
+  gene_anchor <- names(all_attrs)[which.max(any_scores)]
+  gene_len <- length(all_attrs[[gene_anchor]])
+  
+  ## gene 維 = matrix 中長度符合 gene_len 的那一維
+  gene_axis <- if (gene_len == nrow_m) "row" else if (gene_len == ncol_m) "col" else NA
+  if (is.na(gene_axis))
+    stop(sprintf("gene attribute 長度 %d 對不上 matrix 維度 %d x %d", gene_len, nrow_m, ncol_m))
+  
+  ## (2) 在「與 gene 維同長」的欄位中,symbol 優先挑 gene 名
+  same_len_as_gene <- all_attrs[vapply(all_attrs, function(v) length(v) == gene_len, logical(1))]
+  sym_scores <- vapply(same_len_as_gene, frac_gene_symbol, numeric(1))
+  if (max(sym_scores) > 0) {
+    gene_key <- names(same_len_as_gene)[which.max(sym_scores)]      # 有 symbol 欄 -> 用它
   } else {
-    genes <- if (!is.null(rg$key)) row_cands[[rg$key]] else paste0("Gene", seq_len(nrow_m))
-    cells <- if (!is.null(cb$key)) col_cands[[cb$key]] else paste0("Cell", seq_len(ncol_m))
-    note <- sprintf("gene_x_cell; gene=%s cell=%s", rg$key, cb$key)
+    ga <- vapply(same_len_as_gene, frac_gene_any, numeric(1))       # 全是 Ensembl -> 用 any 最高
+    gene_key <- names(same_len_as_gene)[which.max(ga)]
   }
-
-  ## 內容分數都很低 -> 退回用 attribute 名稱猜
-  if (max(score_normal, score_transposed) < 0.3) {
-    gk <- intersect(GENE_ATTR_KEYS, names(row_cands)); gk <- if (length(gk)) gk[1] else names(row_cands)[1]
-    ck <- intersect(CELL_ATTR_KEYS, names(col_cands)); ck <- if (length(ck)) ck[1] else names(col_cands)[1]
-    if (!is.null(gk)) genes <- row_cands[[gk]]
-    if (!is.null(ck)) cells <- col_cands[[ck]]
-    note <- sprintf("依名稱(內容不明確); gene=%s cell=%s", gk, ck)
+  genes <- all_attrs[[gene_key]]
+  
+  ## (3) cell 名:與「另一維」同長、且非 gene 欄;優先名字像 cell/id/barcode
+  cell_len <- if (gene_axis == "row") ncol_m else nrow_m
+  cell_cands <- all_attrs[vapply(all_attrs, function(v) length(v) == cell_len, logical(1))]
+  cell_cands <- cell_cands[setdiff(names(cell_cands), gene_key)]
+  cell_key <- NA
+  if (length(cell_cands) > 0) {
+    prefer <- grepl("cell|barcode|obs_names|_id$|id$", tolower(names(cell_cands)))
+    cell_key <- if (any(prefer)) names(cell_cands)[which(prefer)[1]] else names(cell_cands)[1]
   }
-
+  cells <- if (!is.na(cell_key)) all_attrs[[cell_key]] else paste0("Cell", seq_len(cell_len))
+  
+  ## (4) 讓 matrix 成為 gene x cell
+  if (gene_axis == "row") {
+    note <- sprintf("gene_x_cell; gene=%s cell=%s", gene_key, cell_key)
+  } else {
+    mat <- t(mat)                                    # 目前是 cell x gene -> 轉置
+    note <- sprintf("cell_x_gene(已轉置); gene=%s cell=%s", gene_key, cell_key)
+  }
+  
   ## 貼名、去重、轉 sparse (gene x cell)
   rownames(mat) <- make.unique(as.character(genes))
   colnames(mat) <- make.unique(as.character(cells))
@@ -272,31 +305,38 @@ process_one_sample <- function(mat, gse_clean, gse_raw, gse_hash,
     file.path(plots_dir, paste0(sample_name, "_violin_postQC.pdf")),
     file.path(plots_dir, paste0(sample_name, "_scatter_preQC.pdf")),
     file.path(plots_dir, paste0(sample_name, "_beforeafter.pdf")))
-
+  
   if (file.exists(pre_rds) && file.exists(post_rds) && file.exists(stats_csv) &&
       all(file.exists(expected_plots))) {
     log_line(sprintf("  [skip] %s/%s 已完整,跳過", gse_clean, sample_name)); return("SKIPPED")
   }
   ensure_dir(out_dir); ensure_dir(plots_dir)
-
+  
   tryCatch({
     obj <- CreateSeuratObject(counts=mat, project=sample_name,
                               min.cells=MIN_CELLS_GENE, min.features=MIN_FEATURES_CELL)
     obj$orig.ident1 <- gse_clean; obj$orig.ident2 <- sample_name
     if (!is.na(cond)) obj$condition <- cond
-
+    
     det <- detect_mt_pattern(rownames(obj))
     obj[["percent.mt"]]   <- PercentageFeatureSet(obj, pattern=det$pattern)
     obj[["percent.ribo"]] <- PercentageFeatureSet(obj, pattern=det$ribo)
+    ## 防呆:若完全沒抓到 MT 基因,percent.mt 會全為 0/NA。記錄警告(通常代表
+    ## gene 名沒正確載入,或該物種 MT 命名不同)。percent.mt 全 NA 時補 0 以免繪圖崩潰。
+    if (det$n_mt == 0)
+      log_line(sprintf("    [警告] %s 未偵測到 MT 基因 (物種=%s);percent.mt 將為 0,請檢查基因名是否正確載入",
+                       sample_name, det$species))
+    if (all(is.na(obj$percent.mt)))      obj$percent.mt   <- 0
+    if (all(is.na(obj$percent.ribo)))    obj$percent.ribo <- 0
     log_line(sprintf("    [%s] %s | 物種=%s MT=%s(%d) | 細胞=%d 基因=%d",
                      sample_name, load_note, det$species, det$pattern, det$n_mt, ncol(obj), nrow(obj)))
-
+    
     pre_sum  <- summarise_obj(obj, "pre_QC")
     mad_feat <- mad_bounds(obj$nFeature_RNA, 3, TRUE)
     mad_cnt  <- mad_bounds(obj$nCount_RNA,   3, TRUE)
     mad_mt   <- mad_bounds(obj$percent.mt,   3, FALSE)
     saveRDS(obj, pre_rds)
-
+    
     if (HAVE_GGPLOT) {
       feats <- intersect(c("nFeature_RNA","nCount_RNA","percent.mt","percent.ribo"), colnames(obj@meta.data))
       pdf(expected_plots[1], width=4*length(feats), height=5); print(VlnPlot(obj, features=feats, ncol=length(feats), pt.size=0.1)); dev.off()
@@ -304,13 +344,13 @@ process_one_sample <- function(mat, gse_clean, gse_raw, gse_hash,
       s2 <- FeatureScatter(obj,"nCount_RNA","percent.mt")+ggtitle("nCount vs percent.mt")
       pdf(expected_plots[3], width=12, height=5); if (HAVE_PATCH) print(s1+s2) else { print(s1); print(s2) }; dev.off()
     }
-
+    
     filter_expr <- sprintf("nFeature_RNA > %d & nFeature_RNA < %d & percent.mt < %d", MIN_FEATURE, MAX_FEATURE, MAX_MT_PCT)
     n_before <- ncol(obj)
     obj_post <- subset(obj, subset = nFeature_RNA > MIN_FEATURE & nFeature_RNA < MAX_FEATURE & percent.mt < MAX_MT_PCT)
     n_after <- ncol(obj_post)
     post_sum <- summarise_obj(obj_post, "post_QC")
-
+    
     if (HAVE_GGPLOT) {
       feats <- intersect(c("nFeature_RNA","nCount_RNA","percent.mt","percent.ribo"), colnames(obj_post@meta.data))
       pdf(expected_plots[2], width=4*length(feats), height=5); print(VlnPlot(obj_post, features=feats, ncol=length(feats), pt.size=0.1)); dev.off()
@@ -323,7 +363,7 @@ process_one_sample <- function(mat, gse_clean, gse_raw, gse_hash,
       pdf(expected_plots[4], width=12, height=5); if (HAVE_PATCH) print(g1+g2+g3) else { print(g1);print(g2);print(g3) }; dev.off()
     }
     saveRDS(obj_post, post_rds)
-
+    
     stats_df <- rbind(pre_sum, post_sum)
     stats_df$GSE <- gse_clean; stats_df$GSM <- sample_name; stats_df$condition <- cond
     stats_df$species <- det$species; stats_df$mt_pattern <- det$pattern; stats_df$n_mt_genes <- det$n_mt
@@ -336,7 +376,7 @@ process_one_sample <- function(mat, gse_clean, gse_raw, gse_hash,
     stats_df$n_doublets <- NA_integer_; stats_df$doublet_method <- if (!RUN_DOUBLETFINDER) "skipped(user)" else "none"
     stats_df$load_note <- load_note; stats_df$processed_time <- ts()
     write_csv_utf8(stats_df, stats_csv)
-
+    
     write_metrics_row(data.frame(
       GSE=gse_clean, GSE_folder_raw=gse_raw, GSM=sample_name, condition=cond,
       status="OK", error_note="", gse_has_hash_prefix=gse_hash,
@@ -352,7 +392,7 @@ process_one_sample <- function(mat, gse_clean, gse_raw, gse_hash,
       n_doublets=NA, doublet_method=if (!RUN_DOUBLETFINDER) "skipped(user)" else "none",
       filter_used=filter_expr, source_path=src_path, output_path=out_dir,
       processed_time=ts(), stringsAsFactors=FALSE))
-
+    
     log_line(sprintf("    完成 %s: 細胞 %d -> %d (移除 %.1f%%)",
                      sample_name, n_before, n_after, if (n_before>0) 100*(n_before-n_after)/n_before else 0))
     "OK"
@@ -374,24 +414,24 @@ process_one_sample <- function(mat, gse_clean, gse_raw, gse_hash,
 for (gse_dir in gse_dirs) {
   gse_raw <- basename(gse_dir); gse_hash <- grepl("^#", gse_raw); gse_clean <- sub("^#+", "", gse_raw)
   if (gse_hash) log_line(sprintf("[!] GSE '%s' 有 # 前綴,仍嘗試處理", gse_raw))
-
+  
   looms <- find_loom_files(gse_dir)
   if (length(looms) == 0) {
     add_struct(gse_raw, gse_clean, NA, "NO_LOOM_FILE", "GSE 內找不到 .loom 檔", gse_hash, gse_dir)
     log_line(sprintf("[!] GSE '%s' 無 .loom 檔,跳過", gse_raw)); next
   }
-
+  
   for (lm in looms) {
     fbase <- basename(lm)
     ## 樣本名:去 .loom / .loom.gz 與常見後綴
     sample_name <- sub("\\.loom(\\.gz)?$", "", fbase, ignore.case=TRUE)
     ## condition 由檔名推測 (此資料集有 Wound/P 等;可自行調整)
     cond <- if (grepl("keloid|_KL|_K[0-9]", sample_name, ignore.case=TRUE)) "Keloid"
-            else if (grepl("wound", sample_name, ignore.case=TRUE)) "Wound"
-            else if (grepl("normal|_NS|nskin|scar", sample_name, ignore.case=TRUE)) "NormalSkin" else NA
-
+    else if (grepl("wound", sample_name, ignore.case=TRUE)) "Wound"
+    else if (grepl("normal|_NS|nskin|scar", sample_name, ignore.case=TRUE)) "NormalSkin" else NA
+    
     log_line(sprintf("==> 處理 %s / %s", gse_clean, fbase))
-
+    
     ## 若 .gz 先解壓
     prep <- tryCatch(prepare_loom_path(lm), error=function(e) {
       log_line(sprintf("  [FAILED] 解壓失敗 %s: %s", fbase, conditionMessage(e)))
@@ -399,7 +439,7 @@ for (gse_dir in gse_dirs) {
     })
     if (is.null(prep)) next
     if (prep$is_temp) log_line(sprintf("    已解壓 .gz -> 暫存: %s", prep$path))
-
+    
     ## 讀 loom
     loaded <- tryCatch(read_loom_matrix(prep$path), error=function(e) {
       log_line(sprintf("  [FAILED] 讀取 .loom 失敗 %s: %s", fbase, conditionMessage(e)))
@@ -408,7 +448,7 @@ for (gse_dir in gse_dirs) {
     ## 清掉解壓暫存檔
     if (prep$is_temp && file.exists(prep$path)) unlink(prep$path)
     if (is.null(loaded)) next
-
+    
     add_struct(gse_raw, gse_clean, fbase, "OK", loaded$note, gse_hash, lm)
     process_one_sample(loaded$mat, gse_clean, gse_raw, gse_hash,
                        sample_name=sample_name, cond=cond, src_path=lm, load_note=loaded$note)
